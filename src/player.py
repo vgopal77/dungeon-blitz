@@ -136,16 +136,32 @@ class Player:
     # ------------------------------------------------------------------ draw
 
     def draw(self, surface, label=None):
+        self._draw_shadow(surface)
         color = (255, 80, 80) if self._dmg_flash > 0 else self.color
         if self._super_active > 0 and self.char == 'speedster':
             color = (0, 255, 200)
         pygame.draw.rect(surface, color, self.rect)
-        pygame.draw.rect(surface, WHITE, self.rect, 1)
+        # Bevel: light top-left, dark bottom-right
+        hi = tuple(min(c + 60, 255) for c in color)
+        sh = tuple(max(c - 50, 0)   for c in color)
+        pygame.draw.line(surface, hi, self.rect.topleft,     (self.rect.right - 1, self.rect.top), 2)
+        pygame.draw.line(surface, hi, self.rect.topleft,     (self.rect.left, self.rect.bottom - 1), 2)
+        pygame.draw.line(surface, sh, self.rect.bottomleft,  (self.rect.right - 1, self.rect.bottom), 1)
+        pygame.draw.line(surface, sh, self.rect.topright,    (self.rect.right, self.rect.bottom - 1), 1)
         self._draw_health_bar(surface)
         if label:
             font = pygame.font.Font(None, 20)
             t = font.render(label, True, WHITE)
             surface.blit(t, (self.rect.x, self.rect.y - 18))
+
+    def _draw_shadow(self, surface):
+        sw = self.rect.width + 4
+        sh = 10
+        sx = self.rect.x - 2
+        sy = self.rect.bottom - 4
+        s = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        pygame.draw.ellipse(s, (0, 0, 0, 90), (0, 0, sw, sh))
+        surface.blit(s, (sx, sy))
 
     def _draw_health_bar(self, surface):
         w = TILE_SIZE - 4

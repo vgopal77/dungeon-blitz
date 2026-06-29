@@ -69,10 +69,23 @@ class Enemy:
         return False
 
     def draw(self, surface):
+        self._draw_shadow(surface)
         color = WHITE if self._flash_timer > 0 else self.color
         pygame.draw.rect(surface, color, self.rect)
-        pygame.draw.rect(surface, WHITE, self.rect, 1)
+        hi = tuple(min(c + 55, 255) for c in color)
+        sh = tuple(max(c - 45, 0)   for c in color)
+        pygame.draw.line(surface, hi, self.rect.topleft,    (self.rect.right - 1, self.rect.top), 2)
+        pygame.draw.line(surface, hi, self.rect.topleft,    (self.rect.left, self.rect.bottom - 1), 2)
+        pygame.draw.line(surface, sh, self.rect.bottomleft, (self.rect.right - 1, self.rect.bottom), 1)
+        pygame.draw.line(surface, sh, self.rect.topright,   (self.rect.right, self.rect.bottom - 1), 1)
         self._draw_health_bar(surface)
+
+    def _draw_shadow(self, surface):
+        sw = self.rect.width + 4
+        sh = 9
+        s = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        pygame.draw.ellipse(s, (0, 0, 0, 80), (0, 0, sw, sh))
+        surface.blit(s, (self.rect.x - 2, self.rect.bottom - 4))
 
     def _draw_health_bar(self, surface):
         bar_w = self.rect.width
