@@ -11,7 +11,7 @@ from src.player import Player
 from src.enemy import Enemy
 from src.potion import Potion
 from src.items import Key, Portal
-from src.network import NetworkClient
+# NetworkClient imported lazily so the game works in browser (no threading)
 
 # Fixed spawn and item positions (verified floor tiles)
 SPAWN_P1    = (42, 42)
@@ -34,7 +34,8 @@ DEFAULT_CONFIG = [('goblin', 0), ('goblin', 2), ('orc', 3), ('orc', 4), ('goblin
 
 class Game:
     def __init__(self):
-        pygame.init()
+        pygame.display.init()
+        pygame.font.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Dungeon Blitz")
         self.clock = pygame.time.Clock()
@@ -86,12 +87,15 @@ class Game:
 
     # ------------------------------------------------------------------- run
 
+    def tick(self):
+        self.clock.tick(FPS)
+        self._handle_events()
+        self._update()
+        self._draw()
+
     def run(self):
         while True:
-            dt = self.clock.tick(FPS)
-            self._handle_events()
-            self._update()
-            self._draw()
+            self.tick()
 
     # --------------------------------------------------------------- events
 
@@ -193,6 +197,12 @@ class Game:
     # ------------------------------------------------------------- networking
 
     def _start_host(self):
+        try:
+            from src.network import NetworkClient
+        except Exception:
+            self._waiting_msg = 'Multiplayer not available in browser.\nPlay single-player instead!'
+            self.state = 'mp_host'
+            return
         self.multiplayer = True
         self.is_host = True
         self.net = NetworkClient(SERVER_URL)
@@ -202,6 +212,11 @@ class Game:
         self.state = 'mp_host'
 
     def _start_join(self, code):
+        try:
+            from src.network import NetworkClient
+        except Exception:
+            self._waiting_msg = 'Multiplayer not available in browser.'
+            return
         self.multiplayer = True
         self.is_host = False
         self.net = NetworkClient(SERVER_URL)
