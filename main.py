@@ -1,4 +1,8 @@
 import asyncio
+import pygame
+
+pygame.init()
+
 from src.game import Game
 
 game = Game()

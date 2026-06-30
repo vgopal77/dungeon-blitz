@@ -34,8 +34,6 @@ DEFAULT_CONFIG = [('goblin', 0), ('goblin', 2), ('orc', 3), ('orc', 4), ('goblin
 
 class Game:
     def __init__(self):
-        pygame.display.init()
-        pygame.font.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Dungeon Blitz")
         self.clock = pygame.time.Clock()
