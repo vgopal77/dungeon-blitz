@@ -194,69 +194,101 @@ class Player:
 
     def draw(self, surface, label=None):
         self._draw_trail(surface)
-        self._draw_shadow(surface)
 
         cx, cy = self.rect.center
         radius = self.rect.width // 2
 
         body_color = (255, 90, 90) if self._dmg_flash > 0 else self.color
+
+        # Super / ready aura drawn behind the figure
+        if self._super_active > 0:
+            pulse = radius + 8 + int(4 * math.sin(pygame.time.get_ticks() * 0.02))
+            aura  = pygame.Surface((pulse * 2 + 4, pulse * 2 + 4), pygame.SRCALPHA)
+            pygame.draw.circle(aura, (0, 255, 210, 80), (pulse + 2, pulse + 2), pulse)
+            surface.blit(aura, (cx - pulse - 2, cy - pulse - 2))
+        elif self.super_meter >= 100:
+            pulse = radius + 6 + int(3 * math.sin(pygame.time.get_ticks() * 0.015))
+            aura  = pygame.Surface((pulse * 2 + 4, pulse * 2 + 4), pygame.SRCALPHA)
+            pygame.draw.circle(aura, (200, 120, 255, 70), (pulse + 2, pulse + 2), pulse)
+            surface.blit(aura, (cx - pulse - 2, cy - pulse - 2))
+
         self._draw_body(surface, cx, cy, radius, body_color)
 
         ring_color = WHITE if self._dmg_flash > 0 else self.accent_color
-        pygame.draw.circle(surface, ring_color, (cx, cy), radius + 2, 3)
 
-        if self._super_active > 0:
-            pulse = radius + 5 + int(3 * math.sin(pygame.time.get_ticks() * 0.02))
-            pygame.draw.circle(surface, (0, 255, 210), (cx, cy), pulse, 2)
-        elif self.super_meter >= 100:
-            pulse = radius + 4 + int(2 * math.sin(pygame.time.get_ticks() * 0.015))
-            pygame.draw.circle(surface, (200, 120, 255), (cx, cy), pulse, 2)
-
-        # Facing indicator
-        fx, fy = self._facing
-        if fx or fy:
-            mag = math.hypot(fx, fy) or 1
-            tip = (cx + fx / mag * (radius + 4), cy + fy / mag * (radius + 4))
-            pygame.draw.circle(surface, WHITE, (int(tip[0]), int(tip[1])), 3)
-
-        # Attack flash
+        # Attack flash ring
         if self._atk_flash > 0:
-            alpha = int(255 * (self._atk_flash / 10))
-            arc_r = radius + 14
-            arc_surf = pygame.Surface((arc_r * 2 + 4, arc_r * 2 + 4), pygame.SRCALPHA)
-            pygame.draw.circle(arc_surf, (255, 240, 120, alpha), (arc_r + 2, arc_r + 2), arc_r, 3)
-            surface.blit(arc_surf, (cx - arc_r - 2, cy - arc_r - 2))
+            alpha  = int(255 * (self._atk_flash / 10))
+            arc_r  = radius + 16
+            arc_sf = pygame.Surface((arc_r * 2 + 4, arc_r * 2 + 4), pygame.SRCALPHA)
+            pygame.draw.circle(arc_sf, (255, 240, 120, alpha), (arc_r + 2, arc_r + 2), arc_r, 4)
+            surface.blit(arc_sf, (cx - arc_r - 2, cy - arc_r - 2))
 
         self._draw_health_bar(surface)
 
-        # Label: show team abbreviation + number
+        # Name tag with team + jersey number
         disp = label
         if label and self.team:
-            disp = f'{self.team_abbr} #{self.jersey_number}'
+            disp = f'{self.team_abbr}  #{self.jersey_number}'
         if disp:
             lbl_color = ring_color if ring_color != WHITE else self.accent_color
             t = _font(18).render(disp, True, lbl_color)
-            surface.blit(t, t.get_rect(centerx=cx, bottom=self.rect.top - 4))
+            # small dark bg pill for readability
+            tr = t.get_rect(centerx=cx, bottom=self.rect.top - 16)
+            bg = pygame.Surface((tr.width + 6, tr.height + 2), pygame.SRCALPHA)
+            bg.fill((0, 0, 0, 140))
+            surface.blit(bg, (tr.left - 3, tr.top - 1))
+            surface.blit(t, tr)
 
-    def _draw_body(self, surface, cx, cy, radius, color):
-        darker  = tuple(max(0,   c - 55) for c in color)
-        lighter = tuple(min(255, c + 80) for c in color)
+    def _draw_body(self, surface, cx, cy, r, color):
+        """Basketball player silhouette: shoes → shorts → jersey → head."""
+        sec = self.accent_color
 
-        # Jersey body — main circle
-        pygame.draw.circle(surface, darker,  (cx, cy + 2), radius)
-        pygame.draw.circle(surface, color,   (cx, cy),     radius)
-        # Highlight glint
-        pygame.draw.circle(surface, lighter,
-                           (cx - radius // 3, cy - radius // 3),
-                           max(2, radius // 4))
+        # Floor shadow
+        sh = pygame.Surface((r * 3, r), pygame.SRCALPHA)
+        pygame.draw.ellipse(sh, (0, 0, 0, 55),
+                            (0, sh.get_height() // 3, r * 3, sh.get_height() // 2))
+        surface.blit(sh, (cx - r * 3 // 2, cy + r - 4))
 
-        # Jersey number (contrast colour = accent)
-        num_sz = max(14, int(radius * 0.9))
-        num_s  = _font(num_sz).render(self.jersey_number, True, self.accent_color)
-        # Dark drop-shadow for readability
+        # Shoes
+        pygame.draw.ellipse(surface, (22, 22, 22),
+                            (cx - r + 5, cy + r - 7, (r - 5) * 2, 7))
+
+        # Shorts (lower body, team secondary/darker shade)
+        shorts_col = tuple(max(0, c - 65) for c in color)
+        pygame.draw.ellipse(surface, shorts_col,
+                            (cx - r + 4, cy + 2, (r - 4) * 2, r - 4))
+
+        # Jersey body (upper)
+        pygame.draw.ellipse(surface, tuple(max(0, c - 30) for c in color),
+                            (cx - r + 3, cy - r + 3, (r - 3) * 2, r + 4))
+        pygame.draw.ellipse(surface, color,
+                            (cx - r + 4, cy - r + 1, (r - 4) * 2, r + 2))
+        # Jersey highlight
+        pygame.draw.ellipse(surface, tuple(min(255, c + 50) for c in color),
+                            (cx - r // 2 + 2, cy - r + 3, r // 2, r // 3))
+
+        # Jersey number (large, in accent colour)
+        num_sz   = max(12, int(r * 0.80))
         shadow_s = _font(num_sz).render(self.jersey_number, True, (0, 0, 0))
-        surface.blit(shadow_s, shadow_s.get_rect(center=(cx + 1, cy + 3)))
-        surface.blit(num_s,    num_s.get_rect(center=(cx,     cy + 2)))
+        num_s    = _font(num_sz).render(self.jersey_number, True, sec)
+        surface.blit(shadow_s, shadow_s.get_rect(center=(cx + 1, cy - 2)))
+        surface.blit(num_s,    num_s.get_rect(center=(cx,     cy - 3)))
+
+        # Head
+        head_r = max(5, r // 3 + 2)
+        head_y = cy - r + head_r - 1
+        pygame.draw.circle(surface, (25, 18, 8),   (cx, head_y + 1), head_r + 1)
+        pygame.draw.circle(surface, (215, 165, 90), (cx, head_y),    head_r)
+        # Hair / cap strip in team primary colour
+        pygame.draw.ellipse(surface, tuple(max(0, c - 40) for c in color),
+                            (cx - head_r, head_y - head_r, head_r * 2, head_r + 2))
+
+        # Accent ring (outermost outline)
+        acc = WHITE if self._dmg_flash > 0 else self.accent_color
+        pygame.draw.ellipse(surface, acc,
+                            (cx - r + 1, cy - r + head_r - 4,
+                             (r - 1) * 2, r + head_r + r - 4), 2)
 
     def _draw_trail(self, surface):
         for x, y, alpha in self._trail:
