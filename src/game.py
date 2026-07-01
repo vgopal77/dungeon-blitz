@@ -3,84 +3,82 @@ import sys
 import random
 from src.settings import (
     SCREEN_WIDTH, SCREEN_HEIGHT, FPS, TILE_SIZE,
-    BLACK, WHITE, GRAY, DARK_GRAY, GOLD_COLOR, GREEN,
+    BLACK, WHITE, GRAY, GOLD_COLOR, TEAM_COLORS,
     CHARACTER_STATS, SERVER_URL,
 )
-from src.dungeon import Dungeon
-from src.player import Player
-from src.enemy import Enemy
+from src.arena import Arena, SPAWN_LEFT, SPAWN_RIGHT, build_arena_background
+from src.player import Player, TANK_SUPER_DAMAGE
+from src.ai_bot import AIBot
 from src.potion import Potion
-from src.items import Key, Portal
 # NetworkClient imported lazily so the game works in browser (no threading)
 
-# Fixed spawn and item positions (verified floor tiles)
-SPAWN_P1    = (42, 42)
-SPAWN_P2    = (682, 42)
-KEY_POS     = (15 * TILE_SIZE, 5 * TILE_SIZE)
-PORTAL_POS  = (18 * TILE_SIZE, 12 * TILE_SIZE)
-
-ENEMY_SPAWNS = [
-    (202, 42), (122, 202), (482, 282),
-    (602, 442), (282, 482), (682, 162),
-]
-
-LEVEL_CONFIGS = {
-    1: [('goblin', 0), ('goblin', 1), ('goblin', 2)],
-    2: [('goblin', 0), ('goblin', 1), ('orc', 2)],
-    3: [('goblin', 0), ('goblin', 1), ('orc', 2), ('orc', 3)],
-}
-DEFAULT_CONFIG = [('goblin', 0), ('goblin', 2), ('orc', 3), ('orc', 4), ('goblin', 5)]
+POTION_LIMIT = 2
+POTION_SPAWN_RANGE = (360, 600)   # frames (6-10s @ 60fps)
 
 
 class Game:
     def __init__(self):
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        pygame.display.set_caption("Dungeon Blitz")
+        pygame.display.set_caption("Dungeon Blitz: Arena")
         self.clock = pygame.time.Clock()
         self.font       = pygame.font.Font(None, 32)
         self.big_font   = pygame.font.Font(None, 80)
         self.small_font = pygame.font.Font(None, 24)
         self.title_font = pygame.font.Font(None, 100)
 
-        self.net: NetworkClient | None = None
+        self.net = None
         self.multiplayer = False
         self.is_host = False
         self._net_tick = 0
+        self._mp_action = None
 
         self._code_input = ''
         self._waiting_msg = ''
+        self._menu_banner = ''
         self._menu_sel = 0
         self._char_sel = 'tank'
         self._chosen_char = 'tank'
 
+        self.mode = None           # 'ai' or 'mp'
+        self.arena = None
+        self.player = None
+        self.opponent = None
+        self.bot = None
+        self.potions = []
+        self._potion_timer = 0
+
+        self._ambient_bg = build_arena_background((SCREEN_WIDTH, SCREEN_HEIGHT))
+        self._particles = [self._make_particle() for _ in range(40)]
+
         self.state = 'menu'
-        self._init_game_vars()
 
     # ----------------------------------------------------------------- setup
 
-    def _init_game_vars(self):
-        self.level   = 1
-        self.dungeon = Dungeon()
-        self.player  = Player(*SPAWN_P1, char=self._chosen_char, pid=0)
-        self.player2: Player | None = None
-        self.enemies = self._make_enemies()
-        self.potions: list[Potion] = []
-        self.key     = Key(*KEY_POS)
-        self.portal  = Portal(*PORTAL_POS)
+    def _start_ai_match(self):
+        self.mode = 'ai'
+        self.multiplayer = False
+        self.arena = Arena()
+        self.player = Player(*SPAWN_LEFT, char=self._chosen_char, pid=0)
+        opp_char = random.choice(list(CHARACTER_STATS.keys()))
+        self.opponent = Player(*SPAWN_RIGHT, char=opp_char, pid=1)
+        self.bot = AIBot(self.opponent)
+        self.potions = []
+        self._potion_timer = random.randint(*POTION_SPAWN_RANGE)
+        self.state = 'playing'
 
-    def _make_enemies(self):
-        config = LEVEL_CONFIGS.get(self.level, DEFAULT_CONFIG)
-        return [Enemy(ENEMY_SPAWNS[pos][0], ENEMY_SPAWNS[pos][1], kind) for kind, pos in config]
-
-    def _next_level(self):
-        self.level += 1
-        gold_carry  = self.player.gold
-        score_carry = self.player.score
-        hp_carry    = min(self.player.max_health, self.player.health + 20)
-        self._init_game_vars()
-        self.player.gold  = gold_carry
-        self.player.score = score_carry
-        self.player.health = hp_carry
+    def _reset_match(self):
+        if not self.player or not self.opponent:
+            return
+        p1_spawn = SPAWN_LEFT if self.player.pid == 0 else SPAWN_RIGHT
+        p2_spawn = SPAWN_RIGHT if self.player.pid == 0 else SPAWN_LEFT
+        self.player.health = self.player.max_health
+        self.player.rect.topleft = p1_spawn
+        self.player.super_meter = 0
+        self.opponent.health = self.opponent.max_health
+        self.opponent.rect.topleft = p2_spawn
+        self.opponent.super_meter = 0
+        self.potions = []
+        self._potion_timer = random.randint(*POTION_SPAWN_RANGE)
         self.state = 'playing'
 
     # ------------------------------------------------------------------- run
@@ -106,34 +104,34 @@ class Game:
             key = event.key
 
             if key == pygame.K_ESCAPE:
-                if self.state == 'playing':
-                    self.state = 'menu'
-                else:
+                if self.state == 'menu':
                     pygame.quit(); sys.exit()
+                else:
+                    self.state = 'menu'
+                    self._menu_sel = 0
 
             # ---------- MENU
             elif self.state == 'menu':
-                opts = ['single', 'multiplayer']
+                opts = ['ai', 'mp']
                 if key == pygame.K_UP:
                     self._menu_sel = (self._menu_sel - 1) % len(opts)
                 elif key == pygame.K_DOWN:
                     self._menu_sel = (self._menu_sel + 1) % len(opts)
                 elif key in (pygame.K_RETURN, pygame.K_SPACE):
-                    if opts[self._menu_sel] == 'single':
+                    self._menu_banner = ''
+                    if opts[self._menu_sel] == 'ai':
                         self.state = 'char_select'
                     else:
                         self.state = 'mp_menu'
                         self._menu_sel = 0
 
-            # ---------- CHAR SELECT
+            # ---------- CHAR SELECT (AI)
             elif self.state == 'char_select':
                 if key in (pygame.K_LEFT, pygame.K_RIGHT):
                     self._char_sel = 'speedster' if self._char_sel == 'tank' else 'tank'
                 elif key in (pygame.K_RETURN, pygame.K_SPACE):
                     self._chosen_char = self._char_sel
-                    self.multiplayer = False
-                    self._init_game_vars()
-                    self.state = 'playing'
+                    self._start_ai_match()
 
             # ---------- MP MENU
             elif self.state == 'mp_menu':
@@ -173,24 +171,19 @@ class Game:
 
             # ---------- PLAYING
             elif self.state == 'playing':
-                if key == pygame.K_r:
-                    self._init_game_vars(); self.state = 'playing'
-                elif key == pygame.K_SPACE:
+                if key == pygame.K_SPACE:
                     self._do_attack()
                 elif key == pygame.K_q:
                     self._do_super()
                 elif key == pygame.K_LSHIFT or key == pygame.K_RSHIFT:
-                    self.player.try_dash(self.dungeon)
+                    self.player.try_dash(self.arena)
 
-            # ---------- GAME OVER
-            elif self.state == 'game_over':
+            # ---------- VICTORY / DEFEAT
+            elif self.state in ('victory', 'defeat'):
                 if key == pygame.K_r:
-                    self.level = 1; self._init_game_vars(); self.state = 'playing'
-
-            # ---------- LEVEL CLEAR
-            elif self.state == 'level_clear':
-                if key == pygame.K_SPACE:
-                    self._next_level()
+                    if self.mode == 'mp' and self.net:
+                        self.net.relay({'t': 'rematch'})
+                    self._reset_match()
 
     # ------------------------------------------------------------- networking
 
@@ -198,10 +191,9 @@ class Game:
         try:
             from src.network import NetworkClient
         except Exception:
-            self._waiting_msg = 'Multiplayer not available in browser.\nPlay single-player instead!'
+            self._waiting_msg = 'Multiplayer not available in browser.\nPlay vs AI instead!'
             self.state = 'mp_host'
             return
-        self.multiplayer = True
         self.is_host = True
         self.net = NetworkClient(SERVER_URL)
         self.net.start()
@@ -215,7 +207,6 @@ class Game:
         except Exception:
             self._waiting_msg = 'Multiplayer not available in browser.'
             return
-        self.multiplayer = True
         self.is_host = False
         self.net = NetworkClient(SERVER_URL)
         self.net.start()
@@ -232,54 +223,61 @@ class Game:
             if t == 'created':
                 self.net.room_code = msg['code']
                 self.net.player_id = 0
-                self._waiting_msg = f"Room code: {msg['code']}\nWaiting for player 2..."
-                self._init_game_vars()
+                self._waiting_msg = f"Room code: {msg['code']}\nWaiting for opponent..."
 
             elif t == 'p2_joined':
-                self.player2 = Player(*SPAWN_P2, char='speedster', pid=1)
-                self.state = 'playing'
+                self._begin_pvp_match(pid=0)
 
             elif t == 'joined':
                 self.net.player_id = 1
-                self._init_game_vars()
-                self.player = Player(*SPAWN_P2, char=self._chosen_char, pid=1)
-                self.player2 = Player(*SPAWN_P1, char='tank', pid=0)
-                self.state = 'playing'
+                self._begin_pvp_match(pid=1)
                 self._waiting_msg = ''
 
             elif t == 'error':
                 self._waiting_msg = f"Error: {msg.get('msg')}"
 
             elif t == 'p_left':
-                self._waiting_msg = 'Other player disconnected.'
+                self.net = None
                 self.multiplayer = False
+                self.mode = None
+                self._menu_banner = 'Opponent disconnected.'
+                self.state = 'menu'
+                self._menu_sel = 0
 
             elif t == 'relay':
                 self._handle_relay(msg.get('data', {}))
 
+    def _begin_pvp_match(self, pid):
+        self.mode = 'mp'
+        self.multiplayer = True
+        self.arena = Arena()
+        my_spawn  = SPAWN_LEFT if pid == 0 else SPAWN_RIGHT
+        opp_spawn = SPAWN_RIGHT if pid == 0 else SPAWN_LEFT
+        self.player = Player(*my_spawn, char=self._chosen_char, pid=pid)
+        self.opponent = Player(*opp_spawn, char='tank', pid=1 - pid)
+        self.potions = []
+        self._potion_timer = random.randint(*POTION_SPAWN_RANGE)
+        self.net.relay({'t': 'char', 'char': self._chosen_char})
+        self.state = 'playing'
+
     def _handle_relay(self, data):
         d = data.get('t')
-        if d == 'pos' and self.player2:
-            self.player2.rect.x = data['x']
-            self.player2.rect.y = data['y']
-            self.player2.health = data['h']
-            self.player2.has_key = data.get('key', False)
+        if d == 'pos' and self.opponent:
+            self.opponent.rect.x = data['x']
+            self.opponent.rect.y = data['y']
+            self.opponent.health = data['h']
+            self.opponent._facing = tuple(data.get('facing', self.opponent._facing))
+            self.opponent.super_meter = data.get('super', self.opponent.super_meter)
 
-        elif d == 'kill':
-            idx = data.get('idx')
-            if idx is not None and idx < len(self.enemies):
-                enemy = self.enemies[idx]
-                self.player.gold  += enemy.gold // 2
-                self.player.score += enemy.score // 2
-                self.enemies.pop(idx)
-                if random.random() < 0.4:
-                    self.potions.append(Potion(enemy.rect.x, enemy.rect.y))
+        elif d == 'hit' and self.player:
+            self.player.take_damage(data['dmg'])
 
-        elif d == 'key':
-            self.key.collected = True
+        elif d == 'char' and self.opponent:
+            old_pos = self.opponent.rect.topleft
+            self.opponent = Player(old_pos[0], old_pos[1], char=data['char'], pid=self.opponent.pid)
 
-        elif d == 'exit':
-            self.state = 'level_clear'
+        elif d == 'rematch':
+            self._reset_match()
 
     def _send_pos(self):
         if self.net and self.state == 'playing':
@@ -290,69 +288,89 @@ class Game:
     # --------------------------------------------------------------- combat
 
     def _do_attack(self):
-        killed = self.player.attack(self.enemies)
-        for enemy in killed:
-            idx = self.enemies.index(enemy)
-            self.enemies.remove(enemy)
-            self.player.gold  += enemy.gold
-            self.player.score += enemy.score
-            if random.random() < 0.4:
-                self.potions.append(Potion(enemy.rect.x, enemy.rect.y))
-            if self.multiplayer and self.net:
-                self.net.relay({'t': 'kill', 'idx': idx})
+        if self.mode == 'ai':
+            self.player.attack([self.opponent])
+        elif self.mode == 'mp':
+            if self.player.try_attack_remote(self.opponent) and self.net:
+                self.net.relay({'t': 'hit', 'dmg': self.player.attack_damage})
 
     def _do_super(self):
-        killed = self.player.use_super(self.enemies)
-        for enemy in killed:
-            idx = self.enemies.index(enemy)
-            self.enemies.remove(enemy)
-            self.player.gold  += enemy.gold
-            self.player.score += enemy.score
-            if self.multiplayer and self.net:
-                self.net.relay({'t': 'kill', 'idx': idx})
+        if self.mode == 'ai':
+            self.player.use_super([self.opponent])
+        elif self.mode == 'mp':
+            activated, hit = self.player.try_super_remote(self.opponent)
+            if activated and hit and self.net:
+                self.net.relay({'t': 'hit', 'dmg': TANK_SUPER_DAMAGE})
 
     # --------------------------------------------------------------- update
 
     def _update(self):
         self._poll_network()
+        self._update_particles()
 
         if self.state != 'playing':
             return
 
         self.player.tick()
-        self.player.handle_input(self.dungeon)
+        self.opponent.tick()
+        self.arena.update()
+        self.player.handle_input(self.arena)
         self._send_pos()
 
-        for enemy in self.enemies:
-            enemy.update(self.player, self.dungeon)
+        if self.mode == 'ai':
+            self.bot.update(self.player, self.arena)
 
-        # Enemy contact damage
-        for enemy in self.enemies:
-            if self.player.rect.colliderect(enemy.rect):
-                self.player.take_damage(0.3)
-        if self.player.health <= 0:
-            self.state = 'game_over'
-            return
-
-        # Potions
+        self._update_potions()
         for p in self.potions:
             p.collect(self.player)
+            if self.mode == 'ai':
+                p.collect(self.opponent)
         self.potions = [p for p in self.potions if not p.collected]
 
-        # Key
-        self.key.update()
-        if self.key.collect(self.player):
-            self.player.has_key = True
-            if self.multiplayer and self.net:
-                self.net.relay({'t': 'key'})
+        if self.player.is_dead:
+            self.state = 'defeat'
+        elif self.opponent.is_dead:
+            self.state = 'victory'
 
-        # Portal
-        self.portal.update()
-        self.portal.active = self.player.has_key and not self.enemies
-        if self.portal.active and self.portal.rect.colliderect(self.player.rect):
-            if self.multiplayer and self.net:
-                self.net.relay({'t': 'exit'})
-            self.state = 'level_clear'
+    def _update_potions(self):
+        self._potion_timer -= 1
+        if self._potion_timer <= 0 and len(self.potions) < POTION_LIMIT:
+            self._spawn_potion()
+            self._potion_timer = random.randint(*POTION_SPAWN_RANGE)
+
+    def _spawn_potion(self):
+        for _ in range(20):
+            c = random.randint(1, self.arena.cols - 2)
+            r = random.randint(1, self.arena.rows - 2)
+            if not self.arena.is_wall(c, r):
+                self.potions.append(Potion(c * TILE_SIZE, r * TILE_SIZE))
+                return
+
+    # ------------------------------------------------------------ particles
+
+    def _make_particle(self):
+        return {
+            'x': random.uniform(0, SCREEN_WIDTH),
+            'y': random.uniform(0, SCREEN_HEIGHT),
+            'vy': random.uniform(0.15, 0.5),
+            'r': random.uniform(1, 2.5),
+            'a': random.randint(40, 110),
+        }
+
+    def _update_particles(self):
+        for p in self._particles:
+            p['y'] -= p['vy']
+            if p['y'] < -5:
+                p['y'] = SCREEN_HEIGHT + 5
+                p['x'] = random.uniform(0, SCREEN_WIDTH)
+
+    def _draw_ambient_bg(self):
+        self.screen.blit(self._ambient_bg, (0, 0))
+        for p in self._particles:
+            pygame.draw.circle(
+                self.screen, (160, 140, 255),
+                (int(p['x']), int(p['y'])), p['r'],
+            )
 
     # ----------------------------------------------------------------- draw
 
@@ -360,90 +378,103 @@ class Game:
         self.screen.fill(BLACK)
 
         if self.state == 'menu':
+            self._draw_ambient_bg()
             self._draw_menu()
         elif self.state in ('char_select', 'char_select_mp'):
+            self._draw_ambient_bg()
             self._draw_char_select()
         elif self.state == 'mp_menu':
+            self._draw_ambient_bg()
             self._draw_mp_menu()
         elif self.state in ('mp_host', 'mp_connecting'):
+            self._draw_ambient_bg()
             self._draw_waiting()
         elif self.state == 'mp_join':
+            self._draw_ambient_bg()
             self._draw_join_screen()
         elif self.state == 'playing':
             self._draw_game()
-        elif self.state == 'game_over':
+        elif self.state == 'victory':
             self._draw_game()
-            self._draw_overlay('GAME OVER', (220, 50, 50), 'Press R to try again')
-        elif self.state == 'level_clear':
+            self._draw_overlay('VICTORY!', GOLD_COLOR, 'Press R to rematch  |  ESC for menu')
+        elif self.state == 'defeat':
             self._draw_game()
-            self._draw_overlay(f'LEVEL {self.level} CLEAR!', GOLD_COLOR, 'Press SPACE for next level')
+            self._draw_overlay('DEFEATED', (220, 50, 50), 'Press R to rematch  |  ESC for menu')
 
         pygame.display.flip()
 
     def _draw_game(self):
-        self.dungeon.draw(self.screen)
-        self.key.draw(self.screen)
-        self.portal.draw(self.screen)
+        self.arena.draw(self.screen)
         for p in self.potions:
             p.draw(self.screen)
-        for e in self.enemies:
-            e.draw(self.screen)
-        if self.player2:
-            self.player2.draw(self.screen, label='P2')
-        self.player.draw(self.screen, label='P1' if self.multiplayer else None)
+        opp_label = 'AI' if self.mode == 'ai' else 'OPPONENT'
+        self.opponent.draw(self.screen, label=opp_label)
+        self.player.draw(self.screen, label='YOU')
         self._draw_hud()
 
     def _draw_hud(self):
+        bar_w = 220
+        self._draw_top_bar(10, 'YOU', self.player, TEAM_COLORS[self.player.pid % 2], align='left')
+        self._draw_top_bar(SCREEN_WIDTH - 10 - bar_w, 'AI' if self.mode == 'ai' else 'OPPONENT',
+                            self.opponent, TEAM_COLORS[self.opponent.pid % 2], align='right')
+
         pygame.draw.line(self.screen, GRAY, (0, 560), (SCREEN_WIDTH, 560), 1)
-        hp    = self.font.render(f'HP: {int(self.player.health)}', True, WHITE)
-        gold  = self.font.render(f'Gold: {self.player.gold}', True, GOLD_COLOR)
-        score = self.font.render(f'Score: {self.player.score}', True, (100, 200, 255))
-        lv    = self.font.render(f'Lv.{self.level}', True, GRAY)
-        key_s = self.font.render('KEY', True, GOLD_COLOR if self.player.has_key else (60, 60, 60))
-        self.screen.blit(hp,    (10,  566))
-        self.screen.blit(gold,  (110, 566))
-        self.screen.blit(score, (240, 566))
-        self.screen.blit(lv,    (385, 566))
-        self.screen.blit(key_s, (435, 566))
-        # Super meter
-        pygame.draw.rect(self.screen, (60, 0, 80), (490, 568, 100, 18))
-        pygame.draw.rect(self.screen, (180, 0, 255), (490, 568, self.player.super_meter, 18))
+        pygame.draw.rect(self.screen, (60, 0, 80), (340, 568, 120, 18))
+        pygame.draw.rect(self.screen, (180, 0, 255), (340, 568, int(1.2 * self.player.super_meter), 18))
         q = self.small_font.render('Q=SUPER', True, (200, 150, 255))
-        self.screen.blit(q, (595, 570))
+        self.screen.blit(q, (340, 588))
         hint = self.small_font.render('SPACE=atk  SHIFT=dash  WASD=move', True, GRAY)
-        self.screen.blit(hint, (680, 570))
+        self.screen.blit(hint, hint.get_rect(midright=(SCREEN_WIDTH - 10, 577)))
+
+    def _draw_top_bar(self, x, label, fighter, color, align='left'):
+        bar_w, bar_h = 220, 16
+        ratio = max(0, fighter.health / fighter.max_health)
+        name = self.font.render(f'{label}  ({fighter.char})', True, color)
+        if align == 'left':
+            self.screen.blit(name, (x, 8))
+        else:
+            self.screen.blit(name, name.get_rect(topright=(x + bar_w, 8)))
+        pygame.draw.rect(self.screen, (40, 0, 0), (x, 34, bar_w, bar_h), border_radius=4)
+        fill_w = int(bar_w * ratio)
+        fill_rect = (x, 34, fill_w, bar_h) if align == 'left' else (x + bar_w - fill_w, 34, fill_w, bar_h)
+        bar_color = (0, 200, 0) if ratio > 0.3 else (220, 60, 40)
+        pygame.draw.rect(self.screen, bar_color, fill_rect, border_radius=4)
+        pygame.draw.rect(self.screen, color, (x, 34, bar_w, bar_h), 2, border_radius=4)
+        hp_t = self.small_font.render(f'{max(0, int(fighter.health))}/{fighter.max_health}', True, WHITE)
+        self.screen.blit(hp_t, hp_t.get_rect(center=(x + bar_w // 2, 42)))
 
     def _draw_overlay(self, title, color, subtitle):
         surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        surf.fill((0, 0, 0, 160))
+        surf.fill((0, 0, 0, 170))
         self.screen.blit(surf, (0, 0))
         cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
         t = self.big_font.render(title, True, color)
-        s = self.font.render(f'Score: {self.player.score}   Gold: {self.player.gold}', True, WHITE)
         b = self.font.render(subtitle, True, GRAY)
-        self.screen.blit(t, t.get_rect(center=(cx, cy - 60)))
-        self.screen.blit(s, s.get_rect(center=(cx, cy + 10)))
-        self.screen.blit(b, b.get_rect(center=(cx, cy + 50)))
+        self.screen.blit(t, t.get_rect(center=(cx, cy - 20)))
+        self.screen.blit(b, b.get_rect(center=(cx, cy + 40)))
 
     def _draw_menu(self):
         cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
         title = self.title_font.render('DUNGEON', True, GOLD_COLOR)
         title2 = self.title_font.render('BLITZ', True, (255, 100, 50))
-        self.screen.blit(title,  title.get_rect(center=(cx, cy - 130)))
-        self.screen.blit(title2, title2.get_rect(center=(cx, cy - 50)))
-        opts = ['Single Player', 'Multiplayer (2 Players)']
+        self.screen.blit(title,  title.get_rect(center=(cx, cy - 150)))
+        self.screen.blit(title2, title2.get_rect(center=(cx, cy - 70)))
+        opts = ['Battle AI', 'Battle Online Friend']
         for i, opt in enumerate(opts):
             sel = i == self._menu_sel
             color = GOLD_COLOR if sel else GRAY
             prefix = '> ' if sel else '  '
             t = self.font.render(prefix + opt, True, color)
-            self.screen.blit(t, t.get_rect(center=(cx, cy + 40 + i * 50)))
+            self.screen.blit(t, t.get_rect(center=(cx, cy + 30 + i * 50)))
+        if self._menu_banner:
+            banner = self.small_font.render(self._menu_banner, True, (255, 150, 150))
+            self.screen.blit(banner, banner.get_rect(center=(cx, cy + 110)))
         hint = self.small_font.render('Arrow keys to navigate  |  SPACE / ENTER to select', True, GRAY)
         self.screen.blit(hint, hint.get_rect(center=(cx, SCREEN_HEIGHT - 30)))
 
     def _draw_mp_menu(self):
         cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
-        t = self.big_font.render('MULTIPLAYER', True, GOLD_COLOR)
+        t = self.big_font.render('ONLINE FRIEND', True, GOLD_COLOR)
         self.screen.blit(t, t.get_rect(center=(cx, cy - 100)))
         opts = ['Host a Game', 'Join a Game', 'Back']
         for i, opt in enumerate(opts):
@@ -455,7 +486,7 @@ class Game:
 
     def _draw_char_select(self):
         cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
-        t = self.big_font.render('CHOOSE CHARACTER', True, GOLD_COLOR)
+        t = self.big_font.render('CHOOSE FIGHTER', True, GOLD_COLOR)
         self.screen.blit(t, t.get_rect(center=(cx, 60)))
         chars = ['tank', 'speedster']
         x_positions = [cx - 160, cx + 160]
@@ -467,9 +498,7 @@ class Game:
             box = pygame.Rect(x_positions[i] - 100, cy - 80, 200, 220)
             pygame.draw.rect(self.screen, box_color, box, border_radius=8)
             pygame.draw.rect(self.screen, border, box, 2, border_radius=8)
-            # Character swatch
-            swatch = pygame.Rect(x_positions[i] - 25, cy - 60, 50, 50)
-            pygame.draw.rect(self.screen, stats['color'], swatch)
+            pygame.draw.circle(self.screen, stats['color'], (x_positions[i], cy - 35), 25)
             name = self.font.render(char.upper(), True, WHITE)
             self.screen.blit(name, name.get_rect(center=(x_positions[i], cy + 10)))
             for j, line in enumerate(stats['desc']):
@@ -483,7 +512,7 @@ class Game:
     def _draw_waiting(self):
         cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
         for i, line in enumerate(self._waiting_msg.split('\n')):
-            color = GOLD_COLOR if i == 0 and len(line) <= 10 else WHITE
+            color = GOLD_COLOR if i == 0 and len(line) <= 16 else WHITE
             t = self.big_font.render(line, True, color) if i == 0 else self.font.render(line, True, WHITE)
             self.screen.blit(t, t.get_rect(center=(cx, cy - 40 + i * 60)))
         hint = self.small_font.render('Share this code with your friend', True, GRAY)
