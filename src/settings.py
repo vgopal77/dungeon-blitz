@@ -3,9 +3,6 @@ SCREEN_HEIGHT = 600
 TILE_SIZE     = 40
 FPS           = 60
 
-# Change this to your deployed server URL after hosting
-# Local testing: ws://localhost:8765
-# Render.com:    wss://your-app-name.onrender.com
 SERVER_URL = "ws://localhost:8765"
 
 # Colors
@@ -20,27 +17,61 @@ ENEMY_COLOR  = (220, 50,  50)
 GOLD_COLOR   = (255, 200, 0)
 GREEN        = (50,  220, 80)
 
-# Team colors (PvP ring/outline so two same-character picks stay readable)
 TEAM_COLORS = [
-    (60,  220, 255),   # P1 / you — cyan
-    (255, 70,  130),   # P2 / opponent — magenta
+    (60,  220, 255),
+    (255, 70,  130),
 ]
 
-# Arena (PvP battle map) palette — indoor basketball arena
-ARENA_BG_TOP      = (14,  10,   8)   # rafters / ceiling dark
-ARENA_BG_BOTTOM   = (26,  18,  12)   # lower crowd
-ARENA_FLOOR       = (196, 132,  54)  # maple hardwood light
-ARENA_FLOOR_ALT   = (180, 116,  42)  # maple hardwood dark stripe
-ARENA_GRID_LINE   = (214, 152,  70)  # wood grain
-ARENA_WALL        = (18,   28, 100)  # bleacher / stand navy
-ARENA_WALL_GLOW   = (60,  110, 220)  # arena neon blue
-ARENA_PILLAR      = (210,  60,  16)  # orange barrier
-ARENA_COURT_LINE  = (255, 255, 255)  # court markings
-ARENA_COURT_PAINT = (168, 100,  38)  # paint / key (darker wood)
+# Arena palette — NBA basketball court
+ARENA_BG_TOP      = (22,  15,  10)   # arena ceiling / rafters
+ARENA_BG_BOTTOM   = (40,  28,  18)   # lower crowd / courtside
+ARENA_FLOOR       = (215, 180, 125)  # light maple hardwood
+ARENA_FLOOR_ALT   = (200, 162, 108)  # darker maple stripe
+ARENA_GRID_LINE   = (228, 195, 142)  # subtle wood grain
+ARENA_WALL        = (50,  36,  24)   # dark wood bleacher seat
+ARENA_WALL_GLOW   = (185, 138,  75)  # warm courtside amber glow
+ARENA_PILLAR      = (210,  60,  16)  # orange courtside barrier
+ARENA_COURT_LINE  = (255, 255, 255)  # white court markings
+ARENA_COURT_PAINT = (200,  17,  46)  # NBA red paint / key area
 ARENA_HOOP        = (255, 118,   0)  # orange rim
-ARENA_BACKBOARD   = (238, 238, 238)  # backboard white
+ARENA_BACKBOARD   = (245, 245, 245)  # white backboard
 
-# Character stats
+# NBA Teams
+NBA_TEAMS = {
+    'bulls':    {
+        'name': 'Chicago Bulls',         'city': 'Chicago',
+        'primary': (206,  17,  65),  'secondary': (  0,   0,   0),
+        'abbr': 'CHI', 'char': 'tank',      'number': '23',
+    },
+    'lakers':   {
+        'name': 'Los Angeles Lakers',    'city': 'Los Angeles',
+        'primary': ( 85,  37, 130),  'secondary': (253, 185,  39),
+        'abbr': 'LAL', 'char': 'tank',      'number': '24',
+    },
+    'warriors': {
+        'name': 'Golden State Warriors', 'city': 'Golden State',
+        'primary': ( 29,  66, 138),  'secondary': (255, 199,  44),
+        'abbr': 'GSW', 'char': 'speedster', 'number': '30',
+    },
+    'celtics':  {
+        'name': 'Boston Celtics',        'city': 'Boston',
+        'primary': (  0, 122,  51),  'secondary': (255, 255, 255),
+        'abbr': 'BOS', 'char': 'tank',      'number': '11',
+    },
+    'heat':     {
+        'name': 'Miami Heat',            'city': 'Miami',
+        'primary': (152,   0,  46),  'secondary': (255, 162,   0),
+        'abbr': 'MIA', 'char': 'speedster', 'number':  '3',
+    },
+    'nets':     {
+        'name': 'Brooklyn Nets',         'city': 'Brooklyn',
+        'primary': ( 25,  25,  25),  'secondary': (255, 255, 255),
+        'abbr': 'BKN', 'char': 'speedster', 'number': '11',
+    },
+}
+NBA_TEAM_ORDER = ['bulls', 'lakers', 'warriors', 'celtics', 'heat', 'nets']
+
+# Character stats (referenced by teams via 'char' key)
 CHARACTER_STATS = {
     'tank': {
         'health': 150, 'speed': 2, 'attack_damage': 35,
